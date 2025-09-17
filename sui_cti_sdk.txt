@@ -1,0 +1,546 @@
+// CTI Platform TypeScript SDK for Sui Blockchain
+// Provides easy integration with the CTI sharing platform
+// Author: Marc Lapira
+
+import { SuiClient, getFullnodeUrl } from '@mysten/sui.js/client';
+import { TransactionBlock } from '@mysten/sui.js/transactions';
+import { Ed25519Keypair } from '@mysten/sui.js/keypairs/ed25519';
+import { fromB64 } from '@mysten/sui.js/utils';
+
+// ===== Configuration =====
+export interface CTIPlatformConfig {
+  network: 'localnet' | 'devnet' | 'testnet' | 'mainnet';
+  packageId: string;
+  platformObjectId: string;
+}
+
+export interface ThreatIntelligenceData {
+  iocHash: Uint8Array;
+  threatType: string;
+  severity: number;
+  confidenceScore: number;
+  stixPattern: string;
+  mitreTechniques: string[];
+  expirationHours: number;
+}
+
+export interface ValidationData {
+  qualityScore: number;
+  isAccurate: boolean;
+  comments: string;
+}
+
+export interface ParticipantData {
+  organization: string;
+  address: string;
+  reputationScore: number;
+  accessLevel: number;
+}
+
+// ===== Main CTI Platform SDK Class =====
+export class CTIPlatformSDK {
+  private client: SuiClient;
+  private config: CTIPlatformConfig;
+  
+  constructor(config: CTIPlatformConfig) {
+    this.config = config;
+    this.client = new SuiClient({ 
+      url: getFullnodeUrl(config.network) 
+    });
+  }
+
+  // ===== Participant Management =====
+  
+  /**
+   * Register a new participant in the CTI platform
+   */
+  async registerParticipant(
+    keypair: Ed25519Keypair,
+    organization: string,
+    gasBudget: number = 10000000
+  ): Promise<string> {
+    const tx = new TransactionBlock();
+    
+    tx.moveCall({
+      target: `${this.config.packageId}::threat_intelligence::register_participant`,
+      arguments: [
+        tx.object(this.config.platformObjectId),
+        tx.pure(organization),
+        tx.object('0x6'), // Clock object
+      ],
+    });
+
+    tx.setGasBudget(gasBudget);
+    
+    const result = await this.client.signAndExecuteTransactionBlock({
+      signer: keypair,
+      transactionBlock: tx,
+      options: {
+        showEffects: true,
+        showEvents: true,
+        showObjectChanges: true,
+      },
+    });
+
+    if (result.effects?.status?.status === 'success') {
+      return result.digest;
+    } else {
+      throw new Error(`Registration failed: ${result.effects?.status?.error}`);
+    }
+  }
+
+  /**
+   * Submit new threat intelligence
+   */
+  async submitIntelligence(
+    keypair: Ed25519Keypair,
+    profileObjectId: string,
+    intelligenceData: ThreatIntelligenceData,
+    submissionFee: string, // Amount in MIST (1 SUI = 10^9 MIST)
+    gasBudget: number = 20000000
+  ): Promise<string> {
+    const tx = new TransactionBlock();
+
+    // Split coins for fee payment
+    const [feeCoin] = tx.splitCoins(tx.gas, [tx.pure(submissionFee)]);
+
+    tx.moveCall({
+      target: `${this.config.packageId}::threat_intelligence::submit_intelligence`,
+      arguments: [
+        tx.object(this.config.platformObjectId),
+        tx.object(profileObjectId),
+        tx.pure(Array.from(intelligenceData.iocHash)),
+        tx.pure(intelligenceData.threatType),
+        tx.pure(intelligenceData.severity),
+        tx.pure(intelligenceData.confidenceScore),
+        tx.pure(intelligenceData.stixPattern),
+        tx.pure(intelligenceData.mitreTechniques),
+        tx.pure(intelligenceData.expirationHours),
+        feeCoin,
+        tx.object('0x6'), // Clock object
+      ],
+    });
+
+    tx.setGasBudget(gasBudget);
+
+    const result = await this.client.signAndExecuteTransactionBlock({
+      signer: keypair,
+      transactionBlock: tx,
+      options: {
+        showEffects: true,
+        showEvents: true,
+        showObjectChanges: true,
+      },
+    });
+
+    if (result.effects?.status?.status === 'success') {
+      return result.digest;
+    } else {
+      throw new Error(`Intelligence submission failed: ${result.effects?.status?.error}`);
+    }
+  }
+
+  /**
+   * Validate threat intelligence
+   */
+  async validateIntelligence(
+    keypair: Ed25519Keypair,
+    validatorProfileId: string,
+    intelligenceObjectId: string,
+    validationData: ValidationData,
+    gasBudget: number = 15000000
+  ): Promise<string> {
+    const tx = new TransactionBlock();
+
+    tx.moveCall({
+      target: `${this.config.packageId}::threat_intelligence::validate_intelligence`,
+      arguments: [
+        tx.object(this.config.platformObjectId),
+        tx.object(validatorProfileId),
+        tx.object(intelligenceObjectId),
+        tx.pure(validationData.qualityScore),
+        tx.pure(validationData.isAccurate),
+        tx.pure(validationData.comments),
+        tx.object('0x6'), // Clock object
+      ],
+    });
+
+    tx.setGasBudget(gasBudget);
+
+    const result = await this.client.signAndExecuteTransactionBlock({
+      signer: keypair,
+      transactionBlock: tx,
+      options: {
+        showEffects: true,
+        showEvents: true,
+        showObjectChanges: true,
+      },
+    });
+
+    if (result.effects?.status?.status === 'success') {
+      return result.digest;
+    } else {
+      throw new Error(`Validation failed: ${result.effects?.status?.error}`);
+    }
+  }
+
+  /**
+   * Grant access to threat intelligence
+   */
+  async grantAccess(
+    keypair: Ed25519Keypair,
+    intelligenceObjectId: string,
+    requestorProfileId: string,
+    accessDurationHours: number,
+    gasBudget: number = 10000000
+  ): Promise<string> {
+    const tx = new TransactionBlock();
+
+    tx.moveCall({
+      target: `${this.config.packageId}::threat_intelligence::grant_access`,
+      arguments: [
+        tx.object(intelligenceObjectId),
+        tx.object(requestorProfileId),
+        tx.pure(accessDurationHours),
+        tx.object('0x6'), // Clock object
+      ],
+    });
+
+    tx.setGasBudget(gasBudget);
+
+    const result = await this.client.signAndExecuteTransactionBlock({
+      signer: keypair,
+      transactionBlock: tx,
+      options: {
+        showEffects: true,
+        showEvents: true,
+        showObjectChanges: true,
+      },
+    });
+
+    if (result.effects?.status?.status === 'success') {
+      return result.digest;
+    } else {
+      throw new Error(`Access grant failed: ${result.effects?.status?.error}`);
+    }
+  }
+
+  // ===== Query Functions =====
+
+  /**
+   * Get platform statistics
+   */
+  async getPlatformStats(): Promise<{
+    totalSubmissions: number;
+    totalValidations: number;
+    feePoolBalance: number;
+  }> {
+    const result = await this.client.devInspectTransactionBlock({
+      transactionBlock: (() => {
+        const tx = new TransactionBlock();
+        tx.moveCall({
+          target: `${this.config.packageId}::threat_intelligence::get_platform_stats`,
+          arguments: [tx.object(this.config.platformObjectId)],
+        });
+        return tx;
+      })(),
+      sender: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    });
+
+    if (result.results?.[0]?.returnValues) {
+      const [submissions, validations, feePool] = result.results[0].returnValues.map(
+        (val) => parseInt(val[0])
+      );
+      return {
+        totalSubmissions: submissions,
+        totalValidations: validations,
+        feePoolBalance: feePool,
+      };
+    }
+
+    throw new Error('Failed to fetch platform statistics');
+  }
+
+  /**
+   * Get participant profile data
+   */
+  async getParticipantProfile(profileObjectId: string): Promise<ParticipantData | null> {
+    try {
+      const response = await this.client.getObject({
+        id: profileObjectId,
+        options: {
+          showContent: true,
+          showType: true,
+        },
+      });
+
+      if (response.data?.content && 'fields' in response.data.content) {
+        const fields = response.data.content.fields as any;
+        return {
+          organization: fields.organization,
+          address: fields.address,
+          reputationScore: parseInt(fields.reputation_score),
+          accessLevel: parseInt(fields.access_level),
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error fetching participant profile:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get threat intelligence details
+   */
+  async getThreatIntelligence(intelligenceObjectId: string): Promise<any> {
+    try {
+      const response = await this.client.getObject({
+        id: intelligenceObjectId,
+        options: {
+          showContent: true,
+          showType: true,
+        },
+      });
+
+      if (response.data?.content && 'fields' in response.data.content) {
+        const fields = response.data.content.fields as any;
+        return {
+          threatType: fields.threat_type,
+          severity: parseInt(fields.severity),
+          confidenceScore: parseInt(fields.confidence_score),
+          submitter: fields.submitter,
+          submissionTime: parseInt(fields.submission_time),
+          expirationTime: parseInt(fields.expiration_time),
+          validationCount: parseInt(fields.validation_count),
+          validationScore: parseInt(fields.validation_score),
+          isVerified: fields.is_verified,
+          stixPattern: fields.stix_pattern,
+          mitreTechniques: fields.mitre_techniques,
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error fetching threat intelligence:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Listen for platform events
+   */
+  async subscribeToEvents(
+    eventCallback: (event: any) => void,
+    eventTypes: string[] = []
+  ): Promise<() => void> {
+    const eventFilter = eventTypes.length > 0 
+      ? { Package: this.config.packageId }
+      : { Package: this.config.packageId };
+
+    const unsubscribe = await this.client.subscribeEvent({
+      filter: eventFilter,
+      onMessage: (event) => {
+        eventCallback(event);
+      },
+    });
+
+    return unsubscribe;
+  }
+
+  /**
+   * Get recent events from the platform
+   */
+  async getRecentEvents(limit: number = 50): Promise<any[]> {
+    const events = await this.client.queryEvents({
+      query: { Package: this.config.packageId },
+      limit,
+      order: 'descending',
+    });
+
+    return events.data;
+  }
+
+  // ===== Utility Functions =====
+
+  /**
+   * Create keypair from private key
+   */
+  static createKeypairFromPrivateKey(privateKey: string): Ed25519Keypair {
+    const decoded = fromB64(privateKey);
+    return Ed25519Keypair.fromSecretKey(decoded);
+  }
+
+  /**
+   * Generate new keypair
+   */
+  static generateKeypair(): Ed25519Keypair {
+    return new Ed25519Keypair();
+  }
+
+  /**
+   * Hash IOC data for submission
+   */
+  static hashIOC(iocData: string): Uint8Array {
+    // Simple hash function - in production, use crypto libraries
+    const encoder = new TextEncoder();
+    const data = encoder.encode(iocData);
+    return new Uint8Array(data);
+  }
+
+  /**
+   * Validate STIX pattern format
+   */
+  static validateSTIXPattern(pattern: string): boolean {
+    // Basic STIX pattern validation
+    const stixRegex = /^\[[^\]]+\]\s+(AND|OR|NOT)?\s*.*$/;
+    return stixRegex.test(pattern);
+  }
+
+  /**
+   * Format MITRE ATT&CK techniques
+   */
+  static formatMITRETechniques(techniques: string[]): string[] {
+    return techniques.map(technique => {
+      if (!technique.startsWith('T')) {
+        return `T${technique}`;
+      }
+      return technique;
+    });
+  }
+}
+
+// ===== Advanced Analytics and Monitoring =====
+export class CTIAnalytics {
+  private sdk: CTIPlatformSDK;
+
+  constructor(sdk: CTIPlatformSDK) {
+    this.sdk = sdk;
+  }
+
+  /**
+   * Analyze threat intelligence trends
+   */
+  async analyzeThreatTrends(timeframeHours: number = 24): Promise<{
+    threatTypes: Record<string, number>;
+    severityDistribution: Record<number, number>;
+    submissionTrend: Array<{ time: number; count: number }>;
+  }> {
+    const events = await this.sdk.getRecentEvents(1000);
+    const currentTime = Date.now();
+    const cutoffTime = currentTime - (timeframeHours * 60 * 60 * 1000);
+
+    const submissionEvents = events.filter(event => 
+      event.type.includes('IntelligenceSubmitted') &&
+      parseInt(event.parsedJson?.submission_time || '0') > cutoffTime
+    );
+
+    const threatTypes: Record<string, number> = {};
+    const severityDistribution: Record<number, number> = {};
+    const hourlySubmissions: Record<number, number> = {};
+
+    submissionEvents.forEach(event => {
+      const data = event.parsedJson;
+      if (data) {
+        // Count threat types
+        threatTypes[data.threat_type] = (threatTypes[data.threat_type] || 0) + 1;
+        
+        // Count severity levels (if available)
+        if (data.severity) {
+          severityDistribution[data.severity] = (severityDistribution[data.severity] || 0) + 1;
+        }
+
+        // Count submissions by hour
+        const hour = Math.floor(parseInt(data.submission_time) / (60 * 60 * 1000));
+        hourlySubmissions[hour] = (hourlySubmissions[hour] || 0) + 1;
+      }
+    });
+
+    const submissionTrend = Object.entries(hourlySubmissions).map(([hour, count]) => ({
+      time: parseInt(hour) * 60 * 60 * 1000,
+      count,
+    })).sort((a, b) => a.time - b.time);
+
+    return {
+      threatTypes,
+      severityDistribution,
+      submissionTrend,
+    };
+  }
+
+  /**
+   * Calculate participant reputation trends
+   */
+  async getReputationTrends(): Promise<Array<{
+    participant: string;
+    currentReputation: number;
+    recentChange: number;
+    contributionCount: number;
+  }>> {
+    const events = await this.sdk.getRecentEvents(500);
+    const reputationEvents = events.filter(event => 
+      event.type.includes('ReputationUpdated')
+    );
+
+    const participantStats: Record<string, {
+      currentReputation: number;
+      recentChange: number;
+      contributionCount: number;
+    }> = {};
+
+    reputationEvents.forEach(event => {
+      const data = event.parsedJson;
+      if (data) {
+        const participant = data.participant;
+        if (!participantStats[participant]) {
+          participantStats[participant] = {
+            currentReputation: data.new_reputation,
+            recentChange: 0,
+            contributionCount: 0,
+          };
+        }
+        participantStats[participant].recentChange += 
+          data.new_reputation - data.old_reputation;
+      }
+    });
+
+    return Object.entries(participantStats).map(([participant, stats]) => ({
+      participant,
+      ...stats,
+    }));
+  }
+}
+
+// ===== Export Everything =====
+export default CTIPlatformSDK;
+export { CTIAnalytics };
+
+// ===== Usage Example =====
+/*
+// Example usage:
+const config: CTIPlatformConfig = {
+  network: 'localnet',
+  packageId: '0x...',
+  platformObjectId: '0x...'
+};
+
+const sdk = new CTIPlatformSDK(config);
+const keypair = CTIPlatformSDK.generateKeypair();
+
+// Register participant
+await sdk.registerParticipant(keypair, 'Acme Security Corp');
+
+// Submit threat intelligence
+const intelligenceData: ThreatIntelligenceData = {
+  iocHash: CTIPlatformSDK.hashIOC('192.168.1.100'),
+  threatType: 'malware',
+  severity: 8,
+  confidenceScore: 85,
+  stixPattern: '[ipv4-addr:value = "192.168.1.100"]',
+  mitreTechniques: ['T1055', 'T1003'],
+  expirationHours: 168 // 1 week
+};
+
+await sdk.submitIntelligence(keypair, profileId, intelligenceData, '1000000');
+*/
