@@ -207,9 +207,6 @@ cti-sui-platform/
 
 
 \### Smart Contract Development
-
-
-
 ```bash
 
 cd smart-contracts/cti\_platform
@@ -237,9 +234,6 @@ sui move prove
 
 
 \### API Development
-
-
-
 ```bash
 
 cd api
@@ -267,9 +261,6 @@ npm test
 
 
 \### Frontend Development
-
-
-
 ```bash
 
 cd frontend
@@ -297,9 +288,6 @@ npm test
 
 
 \### Python Testing
-
-
-
 ```bash
 
 cd tests/python
@@ -423,9 +411,6 @@ await siem.push\_intelligence(threatData);
 
 
 \### Comprehensive Test Suite
-
-
-
 ```bash
 
 \# Run all tests
@@ -449,9 +434,6 @@ python -m pytest test\_integration.py -v
 
 
 \### Performance Testing
-
-
-
 ```bash
 
 cd tests/python
@@ -467,9 +449,6 @@ python cti\_platform\_tester.py
 
 
 \### Development Deployment
-
-
-
 ```bash
 
 ./scripts/deploy.sh development localnet
@@ -477,11 +456,7 @@ python cti\_platform\_tester.py
 ```
 
 
-
 \### Production Deployment
-
-
-
 ```bash
 
 ./scripts/deploy.sh production mainnet
@@ -489,11 +464,7 @@ python cti\_platform\_tester.py
 ```
 
 
-
 \### Docker Deployment
-
-
-
 ```bash
 
 docker-compose up -d
@@ -501,17 +472,12 @@ docker-compose up -d
 ```
 
 
-
 \### Kubernetes Deployment
-
-
-
 ```bash
 
 kubectl apply -f k8s/
 
 ```
-
 
 
 \## 📚 API Documentation
@@ -648,27 +614,9 @@ This project is licensed under the MIT License - see the \[LICENSE](LICENSE) fil
 
 
 
-\## 📞 Support
-
-
-
-\- \*\*Documentation\*\*: \[docs/](docs/)
-
-\- \*\*Issues\*\*: \[GitHub Issues](https://github.com/marclapira/cti-sui-platform/issues)
-
-\- \*\*Discussions\*\*: \[GitHub Discussions](https://github.com/marclapira/cti-sui-platform/discussions)
-
-\- \*\*Email\*\*: marc.lapira@example.com
-
-
-
 \## 🔗 Links
 
 
-
-\- \*\*Live Demo\*\*: https://cti-platform-demo.sui.io
-
-\- \*\*Research Paper\*\*: \[Blockchain-Based CTI Sharing on Sui](docs/research-paper.pdf)
 
 \- \*\*API Documentation\*\*: https://api.cti-platform.sui.io/docs
 
@@ -678,7 +626,4 @@ This project is licensed under the MIT License - see the \[LICENSE](LICENSE) fil
 
 ---
 
-
-
-\*\*Built with ❤️ for the cybersecurity community\*\*
 
