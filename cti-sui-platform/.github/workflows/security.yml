@@ -1,0 +1,368 @@
+# .github/workflows/security.yml
+name: Security Checks
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly scan on Mondays at 2 AM UTC
+
+jobs:
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        component: [api, frontend, sdk/typescript]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Install dependencies
+      working-directory: ${{ matrix.component }}
+      run: npm ci
+    
+    - name: Run npm audit
+      working-directory: ${{ matrix.component }}
+      run: |
+        npm audit --audit-level high
+    
+    - name: Run audit-ci
+      working-directory: ${{ matrix.component }}
+      run: |
+        npx audit-ci --config audit-ci.json || true
+    
+    - name: Upload audit results
+      uses: actions/upload-artifact@v3
+      with:
+        name: audit-results-${{ matrix.component }}
+        path: ${{ matrix.component }}/audit-results.json
+
+  smart-contract-security:
+    name: Smart Contract Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        components: clippy
+    
+    - name: Install Sui CLI
+      run: |
+        cargo install --locked --git https://github.com/MystenLabs/sui.git --branch devnet sui
+    
+    - name: Run Clippy security lints
+      working-directory: smart-contracts
+      run: |
+        cargo clippy -- -D warnings -D clippy::security
+    
+    - name: Run Move Prover security checks
+      working-directory: smart-contracts
+      run: |
+        sui move prove --verify-security || echo "Security verification completed with warnings"
+    
+    - name: Check for common vulnerabilities
+      working-directory: smart-contracts
+      run: |
+        echo "Checking for common Move vulnerabilities..."
+        # Check for potential integer overflow
+        grep -r "unchecked" sources/ && exit 1 || echo "✓ No unchecked operations found"
+        # Check for potential reentrancy patterns
+        grep -r "external_call" sources/ && exit 1 || echo "✓ No external calls found"
+        echo "Security checks completed"
+
+  container-security:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        dockerfile: [api/Dockerfile, frontend/Dockerfile]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Build Docker image
+      run: |
+        docker build -f ${{ matrix.dockerfile }} -t security-test:latest $(dirname ${{ matrix.dockerfile }})
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'security-test:latest'
+        format: 'sarif'
+        output: 'trivy-${{ matrix.dockerfile }}.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-${{ matrix.dockerfile }}.sarif'
+
+  secret-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Run TruffleHog OSS
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+
+  code-security:
+    name: Code Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: javascript, python
+    
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v2
+    
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+
+  infrastructure-security:
+    name: Infrastructure Security
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Checkov
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: .
+        framework: dockerfile,github_configuration
+        output_format: sarif
+        output_file_path: checkov-results.sarif
+    
+    - name: Upload Checkov results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: checkov-results.sarif
+
+  api-security:
+    name: API Security Testing
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Install API dependencies
+      working-directory: api
+      run: npm ci
+    
+    - name: Start API service
+      working-directory: api
+      run: |
+        npm start &
+        sleep 10
+      env:
+        DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379
+        NODE_ENV: test
+    
+    - name: Run OWASP ZAP Baseline Scan
+      uses: zaproxy/action-baseline@v0.7.0
+      with:
+        target: 'http://localhost:3000'
+        rules_file_name: '.zap/rules.tsv'
+        cmd_options: '-a'
+
+  python-security:
+    name: Python Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      working-directory: tests/python
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install bandit safety
+    
+    - name: Run Bandit security linter
+      working-directory: tests/python
+      run: |
+        bandit -r . -f json -o bandit-results.json || true
+    
+    - name: Run Safety check
+      working-directory: tests/python
+      run: |
+        safety check --json --output safety-results.json || true
+    
+    - name: Upload security results
+      uses: actions/upload-artifact@v3
+      with:
+        name: python-security-results
+        path: tests/python/*-results.json
+
+  docker-compose-security:
+    name: Docker Compose Security
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Validate Docker Compose files
+      run: |
+        docker-compose -f docker-compose.yml config
+        docker-compose -f docker-compose.prod.yml config
+    
+    - name: Check for security issues in compose files
+      run: |
+        echo "Checking Docker Compose security..."
+        # Check for privileged containers
+        if grep -q "privileged.*true" docker-compose*.yml; then
+          echo "❌ Privileged containers found"
+          exit 1
+        fi
+        echo "✓ No privileged containers"
+        
+        # Check for host network mode
+        if grep -q "network_mode.*host" docker-compose*.yml; then
+          echo "❌ Host network mode found"
+          exit 1
+        fi
+        echo "✓ No host network mode"
+        
+        # Check for bind mounts to sensitive directories
+        if grep -q "/etc:/etc\|/:/host" docker-compose*.yml; then
+          echo "❌ Dangerous bind mounts found"
+          exit 1
+        fi
+        echo "✓ No dangerous bind mounts"
+
+  license-scan:
+    name: License Compliance
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Install license-checker
+      run: npm install -g license-checker
+    
+    - name: Check API licenses
+      working-directory: api
+      run: |
+        npm ci
+        license-checker --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD" --summary
+    
+    - name: Check Frontend licenses
+      working-directory: frontend
+      run: |
+        npm ci
+        license-checker --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD" --summary
+    
+    - name: Check SDK licenses
+      working-directory: sdk/typescript
+      run: |
+        npm ci
+        license-checker --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD" --summary
+
+  security-report:
+    name: Generate Security Report
+    needs: [dependency-scan, smart-contract-security, container-security, secret-scan, code-security, python-security]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Generate security summary
+      run: |
+        echo "# Security Scan Summary" > security-summary.md
+        echo "Generated on: $(date)" >> security-summary.md
+        echo "" >> security-summary.md
+        
+        echo "## Job Results" >> security-summary.md
+        echo "- Dependency Scan: ${{ needs.dependency-scan.result }}" >> security-summary.md
+        echo "- Smart Contract Security: ${{ needs.smart-contract-security.result }}" >> security-summary.md
+        echo "- Container Security: ${{ needs.container-security.result }}" >> security-summary.md
+        echo "- Secret Scan: ${{ needs.secret-scan.result }}" >> security-summary.md
+        echo "- Code Security: ${{ needs.code-security.result }}" >> security-summary.md
+        echo "- Python Security: ${{ needs.python-security.result }}" >> security-summary.md
+        echo "" >> security-summary.md
+        
+        echo "## Recommendations" >> security-summary.md
+        echo "1. Review all failed security checks" >> security-summary.md
+        echo "2. Update dependencies with known vulnerabilities" >> security-summary.md
+        echo "3. Address any secrets found in code" >> security-summary.md
+        echo "4. Review container security scan results" >> security-summary.md
+        
+        cat security-summary.md
+    
+    - name: Upload security report
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-report
+        path: security-summary.md

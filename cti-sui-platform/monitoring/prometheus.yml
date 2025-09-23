@@ -1,0 +1,407 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'cti-platform'
+    environment: 'production'
+
+# Rule files for alerting
+rule_files:
+  - "rules/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # CTI Platform API monitoring
+  - job_name: 'cti-platform-api'
+    static_configs:
+      - targets: ['api:3000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    params:
+      format: ['prometheus']
+    basic_auth:
+      username: 'prometheus'
+      password: 'monitoring_password'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: api:3000
+
+  # Frontend application monitoring
+  - job_name: 'cti-platform-frontend'
+    static_configs:
+      - targets: ['frontend:3000']
+    metrics_path: '/api/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # Nginx reverse proxy monitoring
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:8080']
+    metrics_path: '/nginx_status'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # PostgreSQL database monitoring
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 60s
+    scrape_timeout: 10s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: postgres-exporter:9187
+
+  # Redis monitoring
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 60s
+    scrape_timeout: 10s
+
+  # Node exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # Docker container monitoring
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # Sui blockchain node monitoring (if available)
+  - job_name: 'sui-node'
+    static_configs:
+      - targets: ['sui-node:9184']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    honor_labels: true
+    metrics_path: '/metrics'
+
+  # Application-specific metrics
+  - job_name: 'cti-platform-custom'
+    static_configs:
+      - targets: ['api:3000']
+    metrics_path: '/api/v1/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    params:
+      module: ['cti_platform']
+
+  # Blackbox exporter for endpoint monitoring
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - http://frontend:3000
+        - http://api:3000/health
+        - http://nginx:80
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # SSL certificate monitoring
+  - job_name: 'ssl-exporter'
+    static_configs:
+      - targets: ['ssl-exporter:9219']
+    params:
+      target: ['https://cti-platform.com:443']
+    scrape_interval: 300s
+    scrape_timeout: 10s
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+      scheme: http
+      timeout: 10s
+      api_version: v1
+
+# Remote write configuration (for long-term storage)
+remote_write:
+  - url: "http://victoriametrics:8428/api/v1/write"
+    queue_config:
+      max_samples_per_send: 10000
+      capacity: 20000
+      max_shards: 30
+
+# Remote read configuration
+remote_read:
+  - url: "http://victoriametrics:8428/api/v1/read"
+    read_recent: true
+
+---
+
+# monitoring/rules/cti_platform_rules.yml
+groups:
+  - name: cti_platform_alerts
+    rules:
+      # API service alerts
+      - alert: CTIAPIDown
+        expr: up{job="cti-platform-api"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "CTI Platform API is down"
+          description: "CTI Platform API has been down for more than 30 seconds"
+
+      - alert: CTIAPIHighErrorRate
+        expr: rate(http_requests_total{job="cti-platform-api",status=~"5.."}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate on CTI Platform API"
+          description: "Error rate is {{ $value }} errors per second"
+
+      - alert: CTIAPIHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="cti-platform-api"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency on CTI Platform API"
+          description: "95th percentile latency is {{ $value }} seconds"
+
+      # Database alerts
+      - alert: PostgreSQLDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database has been down for more than 1 minute"
+
+      - alert: PostgreSQLHighConnections
+        expr: pg_stat_database_numbackends / pg_settings_max_connections > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL high connection usage"
+          description: "PostgreSQL connection usage is {{ $value | humanizePercentage }}"
+
+      - alert: PostgreSQLSlowQueries
+        expr: rate(pg_stat_statements_mean_time[5m]) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL slow queries detected"
+          description: "Average query time is {{ $value }}ms"
+
+      # Redis alerts
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache has been down for more than 1 minute"
+
+      - alert: RedisHighMemoryUsage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis high memory usage"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}"
+
+      # System resource alerts
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) < 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space is {{ $value | humanizePercentage }} full on {{ $labels.instance }}"
+
+      # CTI Platform specific alerts
+      - alert: CTIIntelligenceSubmissionRate
+        expr: rate(cti_intelligence_submissions_total[5m]) < 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low CTI intelligence submission rate"
+          description: "Intelligence submission rate is {{ $value }} per second"
+
+      - alert: CTIValidationBacklog
+        expr: cti_pending_validations > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CTI validation backlog"
+          description: "There are {{ $value }} pending validations"
+
+      - alert: CTIReputationAnomalies
+        expr: increase(cti_reputation_negative_changes[1h]) > increase(cti_reputation_positive_changes[1h]) * 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unusual reputation pattern detected"
+          description: "Negative reputation changes significantly exceed positive changes"
+
+      # Blockchain integration alerts
+      - alert: SuiBlockchainConnectivity
+        expr: sui_node_connectivity == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sui blockchain connectivity lost"
+          description: "Unable to connect to Sui blockchain network"
+
+      - alert: HighGasUsage
+        expr: rate(sui_gas_used_total[5m]) > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High gas usage detected"
+          description: "Gas usage rate is {{ $value }} per second"
+
+      # Security alerts
+      - alert: HighFailedAuthAttempts
+        expr: rate(cti_auth_failures_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Authentication failure rate is {{ $value }} per second"
+
+      - alert: SuspiciousUserActivity
+        expr: rate(cti_suspicious_activities_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Suspicious user activity detected"
+          description: "Suspicious activity rate is {{ $value }} per second"
+
+  - name: cti_platform_performance
+    rules:
+      # Performance recording rules
+      - record: cti_api_request_rate
+        expr: rate(http_requests_total{job="cti-platform-api"}[5m])
+
+      - record: cti_api_error_rate
+        expr: rate(http_requests_total{job="cti-platform-api",status=~"5.."}[5m])
+
+      - record: cti_api_latency_p95
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="cti-platform-api"}[5m]))
+
+      - record: cti_intelligence_submission_rate
+        expr: rate(cti_intelligence_submissions_total[5m])
+
+      - record: cti_validation_rate
+        expr: rate(cti_validations_total[5m])
+
+      - record: cti_reputation_changes_rate
+        expr: rate(cti_reputation_changes_total[5m])
+
+---
+
+# monitoring/alertmanager.yml
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@cti-platform.com'
+
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'web.hook'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 5s
+      repeat_interval: 5m
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      repeat_interval: 30m
+
+receivers:
+  - name: 'web.hook'
+    webhook_configs:
+      - url: 'http://webhook:5001/'
+
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'admin@cti-platform.com'
+        subject: '🚨 CTI Platform Critical Alert'
+        body: |
+          Alert: {{ .GroupLabels.alertname }}
+          Summary: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}
+          Description: {{ range .Alerts }}{{ .Annotations.description }}{{ end }}
+    slack_configs:
+      - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+        channel: '#cti-platform-alerts'
+        title: '🚨 Critical Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+
+  - name: 'warning-alerts'
+    email_configs:
+      - to: 'team@cti-platform.com'
+        subject: '⚠️ CTI Platform Warning'
+        body: |
+          Alert: {{ .GroupLabels.alertname }}
+          Summary: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}
+          Description: {{ range .Alerts }}{{ .Annotations.description }}{{ end }}
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
